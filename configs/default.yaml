@@ -1,0 +1,42 @@
+# 3D MRI Super-Resolution Configuration
+
+# Experiment settings
+experiment:
+  name: "sr3d_baseline"
+  seed: 42
+
+# Data settings
+data:
+  root: "./data/kirby21"
+  train_split: "train"
+  val_split: "val"
+  test_split: "test"
+  patch_size: 64
+  stride: 32
+  blur_sigma: 1.2
+  cache: false
+  num_workers: 4
+
+# Model settings
+model:
+  in_channels: 1
+  out_channels: 1
+  channels: 48
+  num_blocks: 8
+  dilation: 2
+
+# Training settings
+training:
+  scale: 2
+  batch_size: 4
+  epochs: 100
+  lr: 0.0002
+  weight_decay: 0.0001
+  l1_weight: 1.0
+  mse_weight: 0.1
+
+# Output settings
+output:
+  save_dir: "./results"
+  log_interval: 10
+  save_interval: 10
