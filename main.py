@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 
 from data.datasets.kirby21_dataset import Kirby21Dataset
 from engine.trainer import Trainer
+from engine.tester import Tester
 from models.sr3d_net import SR3DNet
 
 logging.basicConfig(
@@ -107,6 +108,66 @@ def train(cfg: dict) -> None:
     trainer.run()
 
 
+def test(cfg: dict) -> None:
+    set_seed(cfg["experiment"]["seed"])
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info(f"Using device: {device}")
+
+    test_dataset = Kirby21Dataset(
+        root=cfg["data"]["root"],
+        split=cfg["data"]["test_split"],
+        scale=cfg["training"]["scale"],
+        patch_size=cfg["data"]["patch_size"],
+        stride=cfg["data"]["stride"],
+        blur_sigma=cfg["data"]["blur_sigma"],
+        cache=cfg["data"]["cache"],
+        training=False,
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=cfg["data"]["num_workers"],
+        pin_memory=True,
+    )
+
+    model = SR3DNet(
+        in_channels=cfg["model"]["in_channels"],
+        out_channels=cfg["model"]["out_channels"],
+        channels=cfg["model"]["channels"],
+        num_blocks=cfg["model"]["num_blocks"],
+        scale=cfg["training"]["scale"],
+        dilation=cfg["model"]["dilation"],
+    )
+
+    checkpoint_path = Path(cfg["output"]["save_dir"]) / "best_model.pth"
+    if not checkpoint_path.exists():
+        logger.error(f"Checkpoint not found: {checkpoint_path}")
+        return
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    logger.info(f"Loaded checkpoint from {checkpoint_path}")
+
+    tester = Tester(
+        model=model,
+        test_loader=test_loader,
+        device=device,
+        save_dir=cfg["output"]["save_dir"],
+        scale=cfg["training"]["scale"],
+        patch_size=cfg["data"]["patch_size"],
+    )
+
+    metrics = tester.run()
+
+    # Generate visualizations
+    from visualization.visualize import plot_training_curves
+    log_dir = str(Path(cfg["output"]["save_dir"]) / "logs")
+    curves_path = str(Path(cfg["output"]["save_dir"]) / "test" / "training_curves.png")
+    plot_training_curves(log_dir, curves_path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="3D MRI Super-Resolution")
     parser.add_argument(
@@ -159,7 +220,7 @@ def main() -> None:
     if args.mode == "train":
         train(cfg)
     else:
-        logger.info("Test mode not implemented yet")
+        test(cfg)
 
 
 if __name__ == "__main__":
