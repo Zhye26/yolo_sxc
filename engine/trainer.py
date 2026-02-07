@@ -112,9 +112,13 @@ class Trainer:
         self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         return checkpoint["epoch"]
 
-    def run(self) -> None:
-        logger.info(f"Starting training for {self.epochs} epochs")
-        for epoch in range(1, self.epochs + 1):
+    def run(self, resume: str | None = None) -> None:
+        start_epoch = 1
+        if resume:
+            start_epoch = self.load_checkpoint(resume) + 1
+            logger.info(f"Resumed from epoch {start_epoch - 1}")
+        logger.info(f"Training epochs {start_epoch}..{self.epochs}")
+        for epoch in range(start_epoch, self.epochs + 1):
             train_metrics = self.train_epoch(epoch)
             val_metrics = self.validate()
 

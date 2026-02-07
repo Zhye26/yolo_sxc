@@ -37,7 +37,7 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def train(cfg: dict) -> None:
+def train(cfg: dict, resume: str | None = None) -> None:
     set_seed(cfg["experiment"]["seed"])
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Using device: {device}")
@@ -105,10 +105,10 @@ def train(cfg: dict) -> None:
         mse_weight=cfg["training"]["mse_weight"],
     )
 
-    trainer.run()
+    trainer.run(resume=resume)
 
 
-def test(cfg: dict) -> None:
+def test(cfg: dict, checkpoint: str | None = None) -> None:
     set_seed(cfg["experiment"]["seed"])
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Using device: {device}")
@@ -141,7 +141,7 @@ def test(cfg: dict) -> None:
         dilation=cfg["model"]["dilation"],
     )
 
-    checkpoint_path = Path(cfg["output"]["save_dir"]) / "best_model.pth"
+    checkpoint_path = Path(checkpoint) if checkpoint else Path(cfg["output"]["save_dir"]) / "best_model.pth"
     if not checkpoint_path.exists():
         logger.error(f"Checkpoint not found: {checkpoint_path}")
         return
@@ -196,6 +196,18 @@ def main() -> None:
         default="0",
         help="GPU device ID",
     )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to checkpoint for resuming training",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to checkpoint for testing (default: best_model.pth)",
+    )
 
     args = parser.parse_args()
 
@@ -216,11 +228,14 @@ def main() -> None:
 
     if args.scale is not None:
         cfg["training"]["scale"] = args.scale
+        cfg["output"]["save_dir"] = str(
+            Path(cfg["output"]["save_dir"]) / f"x{args.scale}"
+        )
 
     if args.mode == "train":
-        train(cfg)
+        train(cfg, resume=args.resume)
     else:
-        test(cfg)
+        test(cfg, checkpoint=args.checkpoint)
 
 
 if __name__ == "__main__":
