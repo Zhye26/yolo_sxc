@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch import nn
 import yaml
 from torch.utils.data import DataLoader
 
@@ -16,12 +17,29 @@ from data.datasets.kirby21_dataset import Kirby21Dataset
 from engine.trainer import Trainer
 from engine.tester import Tester
 from models.sr3d_net import SR3DNet
+from models.simple3d_cnn import Simple3DCNN
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def build_model(cfg: dict, scale: int, model_name: str = "sr3dnet",
+                use_mddta: bool = True, use_gddfn: bool = True) -> nn.Module:
+    """Build model by name with ablation support."""
+    mc = cfg["model"]
+    if model_name == "simple3dcnn":
+        return Simple3DCNN(
+            in_channels=mc["in_channels"], out_channels=mc["out_channels"],
+            channels=mc["channels"], num_blocks=mc["num_blocks"], scale=scale,
+        )
+    return SR3DNet(
+        in_channels=mc["in_channels"], out_channels=mc["out_channels"],
+        channels=mc["channels"], num_blocks=mc["num_blocks"], scale=scale,
+        dilation=mc["dilation"], use_mddta=use_mddta, use_gddfn=use_gddfn,
+    )
 
 
 def set_seed(seed: int) -> None:
@@ -37,7 +55,9 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def train(cfg: dict, resume: str | None = None) -> None:
+def train(cfg: dict, resume: str | None = None,
+          model_name: str = "sr3dnet",
+          use_mddta: bool = True, use_gddfn: bool = True) -> None:
     set_seed(cfg["experiment"]["seed"])
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Using device: {device}")
@@ -82,14 +102,7 @@ def train(cfg: dict, resume: str | None = None) -> None:
     )
 
     # Create model
-    model = SR3DNet(
-        in_channels=cfg["model"]["in_channels"],
-        out_channels=cfg["model"]["out_channels"],
-        channels=cfg["model"]["channels"],
-        num_blocks=cfg["model"]["num_blocks"],
-        scale=cfg["training"]["scale"],
-        dilation=cfg["model"]["dilation"],
-    )
+    model = build_model(cfg, cfg["training"]["scale"], model_name, use_mddta, use_gddfn)
 
     # Create trainer and run
     trainer = Trainer(
@@ -108,7 +121,9 @@ def train(cfg: dict, resume: str | None = None) -> None:
     trainer.run(resume=resume)
 
 
-def test(cfg: dict, checkpoint: str | None = None) -> None:
+def test(cfg: dict, checkpoint: str | None = None,
+         model_name: str = "sr3dnet",
+         use_mddta: bool = True, use_gddfn: bool = True) -> None:
     set_seed(cfg["experiment"]["seed"])
     device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Using device: {device}")
@@ -132,14 +147,7 @@ def test(cfg: dict, checkpoint: str | None = None) -> None:
         pin_memory=True,
     )
 
-    model = SR3DNet(
-        in_channels=cfg["model"]["in_channels"],
-        out_channels=cfg["model"]["out_channels"],
-        channels=cfg["model"]["channels"],
-        num_blocks=cfg["model"]["num_blocks"],
-        scale=cfg["training"]["scale"],
-        dilation=cfg["model"]["dilation"],
-    )
+    model = build_model(cfg, cfg["training"]["scale"], model_name, use_mddta, use_gddfn)
 
     checkpoint_path = Path(checkpoint) if checkpoint else Path(cfg["output"]["save_dir"]) / "best_model.pth"
     if not checkpoint_path.exists():
@@ -208,6 +216,27 @@ def main() -> None:
         default=None,
         help="Path to checkpoint for testing (default: best_model.pth)",
     )
+    parser.add_argument(
+        "--model",
+        type=str,
+        choices=["sr3dnet", "simple3dcnn"],
+        default="sr3dnet",
+        help="Model architecture",
+    )
+    parser.add_argument("--no-mddta", action="store_true", help="Ablation: disable MDDTA")
+    parser.add_argument("--no-gddfn", action="store_true", help="Ablation: disable GDDFN")
+    parser.add_argument(
+        "--num-blocks",
+        type=int,
+        default=None,
+        help="Override number of RRAF blocks",
+    )
+    parser.add_argument(
+        "--exp-name",
+        type=str,
+        default=None,
+        help="Experiment name (creates subdirectory under save_dir)",
+    )
 
     args = parser.parse_args()
 
@@ -228,14 +257,27 @@ def main() -> None:
 
     if args.scale is not None:
         cfg["training"]["scale"] = args.scale
-        cfg["output"]["save_dir"] = str(
-            Path(cfg["output"]["save_dir"]) / f"x{args.scale}"
-        )
+
+    # Build save_dir: base / [exp_name] / x{scale}
+    save_base = Path(cfg["output"]["save_dir"])
+    if args.exp_name:
+        save_base = save_base / args.exp_name
+    if args.scale is not None:
+        save_base = save_base / f"x{args.scale}"
+    cfg["output"]["save_dir"] = str(save_base)
+
+    if args.num_blocks is not None:
+        cfg["model"]["num_blocks"] = args.num_blocks
+
+    use_mddta = not args.no_mddta
+    use_gddfn = not args.no_gddfn
 
     if args.mode == "train":
-        train(cfg, resume=args.resume)
+        train(cfg, resume=args.resume, model_name=args.model,
+              use_mddta=use_mddta, use_gddfn=use_gddfn)
     else:
-        test(cfg, checkpoint=args.checkpoint)
+        test(cfg, checkpoint=args.checkpoint, model_name=args.model,
+             use_mddta=use_mddta, use_gddfn=use_gddfn)
 
 
 if __name__ == "__main__":

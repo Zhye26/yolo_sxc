@@ -1,6 +1,7 @@
 """Test/inference pipeline for 3D MRI super-resolution."""
 from __future__ import annotations
 
+import json
 import logging
 from collections import defaultdict
 from pathlib import Path
@@ -169,6 +170,11 @@ class Tester:
                 "sr_psnr": avg_sr_psnr, "sr_ssim": avg_sr_ssim,
                 "bl_psnr": avg_bl_psnr, "bl_ssim": avg_bl_ssim,
             }
+
+        # Save metrics to JSON
+        metrics_path = self.save_dir / "metrics.json"
+        with open(metrics_path, "w") as f:
+            json.dump(all_metrics, f, indent=2)
 
         logger.info(f"Results saved to {self.save_dir}")
         return all_metrics

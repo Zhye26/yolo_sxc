@@ -17,10 +17,13 @@ def _discover_nifti(source: Path) -> List[Path]:
 
 
 def _extract_subject_id(path: Path) -> str:
+    """Map session number to real subject ID (sessions 1-21 = scan1, 22-42 = scan2)."""
     stem = path.name.replace(".nii.gz", "").replace(".nii", "")
-    m = re.search(r"(KKI2009[-_]?\d+)", stem, re.IGNORECASE)
+    m = re.search(r"KKI2009[-_]?(\d+)", stem, re.IGNORECASE)
     if m:
-        return m.group(1)
+        session = int(m.group(1))
+        subj = session if session <= 21 else session - 21
+        return f"KKI2009-{subj:02d}"
     m = re.match(r"(\d+)", stem)
     if m:
         return m.group(1)
@@ -39,7 +42,7 @@ def group_by_subject(paths: List[Path]) -> Dict[str, List[Path]]:
 
 def split_subjects(
     subjects: Sequence[str],
-    ratios: Tuple[float, float, float] = (0.7, 0.15, 0.15),
+    ratios: Tuple[float, float, float] = (0.7, 0.2, 0.1),
     seed: int = 42,
 ) -> Dict[str, List[str]]:
     assert abs(sum(ratios) - 1.0) < 1e-6

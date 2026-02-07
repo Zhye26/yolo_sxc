@@ -1,4 +1,4 @@
-"""Generate thesis-ready results: comparison tables, summary figures, model analysis."""
+"""Generate thesis-ready results: comparison tables, model analysis."""
 from __future__ import annotations
 
 import argparse
@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import torch
 
 from models.sr3d_net import SR3DNet
+from models.simple3d_cnn import Simple3DCNN
 
 
 def count_parameters(model: torch.nn.Module) -> int:
@@ -18,7 +19,6 @@ def count_parameters(model: torch.nn.Module) -> int:
 
 
 def estimate_flops(model: torch.nn.Module, scale: int, patch: int = 64) -> float:
-    """Rough FLOPs estimate via a forward pass with hooks."""
     total_flops = 0
     hooks = []
 
@@ -50,63 +50,128 @@ def estimate_flops(model: torch.nn.Module, scale: int, patch: int = 64) -> float
     return total_flops
 
 
-def model_summary(scale: int = 2) -> dict:
-    model = SR3DNet(scale=scale)
+MODEL_CONFIGS = {
+    "sr3dnet":          {"cls": SR3DNet,    "kw": {}},
+    "simple3dcnn":      {"cls": Simple3DCNN, "kw": {}},
+    "sr3dnet_no_mddta": {"cls": SR3DNet,    "kw": {"use_mddta": False}},
+    "sr3dnet_no_gddfn": {"cls": SR3DNet,    "kw": {"use_mddta": True, "use_gddfn": False}},
+    "sr3dnet_no_both":  {"cls": SR3DNet,    "kw": {"use_mddta": False, "use_gddfn": False}},
+    "sr3dnet_n4":       {"cls": SR3DNet,    "kw": {"num_blocks": 4}},
+    "sr3dnet_n12":      {"cls": SR3DNet,    "kw": {"num_blocks": 12}},
+}
+
+DISPLAY_NAMES = {
+    "sr3dnet":          "SR3DNet (Ours)",
+    "simple3dcnn":      "Simple 3D CNN",
+    "sr3dnet_no_mddta": "w/o MDDTA",
+    "sr3dnet_no_gddfn": "w/o GDDFN",
+    "sr3dnet_no_both":  "w/o MDDTA & GDDFN",
+    "sr3dnet_n4":       "N=4 RRAF blocks",
+    "sr3dnet_n12":      "N=12 RRAF blocks",
+    "trilinear":        "Trilinear Interp.",
+}
+
+
+def build_model_info(name: str, scale: int) -> dict:
+    cfg = MODEL_CONFIGS[name]
+    model = cfg["cls"](scale=scale, **cfg["kw"])
     params = count_parameters(model)
     flops = estimate_flops(model, scale)
-    return {
-        "scale": scale,
-        "parameters": params,
-        "parameters_M": f"{params / 1e6:.2f}M",
-        "flops": flops,
-        "flops_G": f"{flops / 1e9:.2f}G",
-    }
+    return {"params": params, "params_M": f"{params/1e6:.2f}M", "flops_G": f"{flops/1e9:.2f}G"}
 
 
-def collect_metrics(results_dir: str) -> dict:
-    """Collect test metrics from results directories."""
-    base = Path(results_dir)
-    summary = {}
-    for scale_dir in sorted(base.iterdir()):
-        if not scale_dir.is_dir():
+def collect_all_metrics(results_dir: Path) -> dict:
+    """Scan results/{exp_name}/x{scale}/test/metrics.json for all experiments."""
+    data = {}
+    for exp_dir in sorted(results_dir.iterdir()):
+        if not exp_dir.is_dir():
             continue
-        test_dir = scale_dir / "test"
-        if not test_dir.exists():
-            continue
-        scale_name = scale_dir.name
-        nifti_files = list(test_dir.glob("*_sr.nii.gz"))
-        summary[scale_name] = {
-            "num_volumes": len(nifti_files),
-            "test_dir": str(test_dir),
-        }
-    return summary
+        exp_name = exp_dir.name
+        data[exp_name] = {}
+        for scale_dir in sorted(exp_dir.iterdir()):
+            if not scale_dir.is_dir():
+                continue
+            metrics_file = scale_dir / "test" / "metrics.json"
+            if metrics_file.exists():
+                with open(metrics_file) as f:
+                    m = json.load(f)
+                data[exp_name][scale_dir.name] = m.get("average", {})
+    return data
 
 
-def print_model_table():
-    print("\n" + "=" * 60)
-    print("Model Complexity Analysis")
-    print("=" * 60)
-    print(f"{'Scale':<10}{'Params':<15}{'FLOPs (64^3 input)':<20}")
-    print("-" * 60)
-    for s in [2, 4]:
-        info = model_summary(s)
-        print(f"x{s:<9}{info['parameters_M']:<15}{info['flops_G']:<20}")
-    print("=" * 60)
+def print_complexity_table():
+    print("\n" + "=" * 70)
+    print("Table 1: Model Complexity Comparison")
+    print("=" * 70)
+    header = f"{'Method':<25}{'Scale':<8}{'Params':<12}{'FLOPs':<12}"
+    print(header)
+    print("-" * 70)
+    for name in ["sr3dnet", "simple3dcnn", "sr3dnet_no_mddta",
+                  "sr3dnet_no_gddfn", "sr3dnet_no_both", "sr3dnet_n4", "sr3dnet_n12"]:
+        for s in [2, 4]:
+            info = build_model_info(name, s)
+            label = DISPLAY_NAMES.get(name, name)
+            print(f"{label:<25}x{s:<7}{info['params_M']:<12}{info['flops_G']:<12}")
+    print("=" * 70)
 
 
-def print_results_table(results_dir: str):
-    summary = collect_metrics(results_dir)
-    if not summary:
-        print(f"\nNo test results found in {results_dir}")
-        print("Run experiments first: bash scripts/run_experiments.sh")
-        return
-    print("\n" + "=" * 60)
-    print("Experiment Results Summary")
-    print("=" * 60)
-    for scale_name, info in summary.items():
-        print(f"\n[{scale_name}] {info['num_volumes']} test volumes")
-        print(f"  Results: {info['test_dir']}")
-    print("=" * 60)
+def print_comparative_table(metrics: dict):
+    print("\n" + "=" * 70)
+    print("Table 2: Comparative Experiment Results (PSNR / SSIM)")
+    print("=" * 70)
+    comp_methods = ["sr3dnet", "simple3dcnn"]
+    header = f"{'Method':<25}{'2x PSNR':<12}{'2x SSIM':<12}{'4x PSNR':<12}{'4x SSIM':<12}"
+    print(header)
+    print("-" * 70)
+
+    # Trilinear baseline (from sr3dnet test results)
+    for scale_key in ["x2", "x4"]:
+        sr3d = metrics.get("sr3dnet", {}).get(scale_key, {})
+        if sr3d:
+            break
+    trilinear_row = f"{'Trilinear Interp.':<25}"
+    for sk in ["x2", "x4"]:
+        m = metrics.get("sr3dnet", {}).get(sk, {})
+        if m:
+            trilinear_row += f"{m.get('bl_psnr', '-'):<12.4f}" if isinstance(m.get('bl_psnr'), float) else f"{'-':<12}"
+            trilinear_row += f"{m.get('bl_ssim', '-'):<12.4f}" if isinstance(m.get('bl_ssim'), float) else f"{'-':<12}"
+        else:
+            trilinear_row += f"{'-':<12}{'-':<12}"
+    print(trilinear_row)
+
+    for name in comp_methods:
+        label = DISPLAY_NAMES.get(name, name)
+        row = f"{label:<25}"
+        for sk in ["x2", "x4"]:
+            m = metrics.get(name, {}).get(sk, {})
+            if m and "sr_psnr" in m:
+                row += f"{m['sr_psnr']:<12.4f}{m['sr_ssim']:<12.4f}"
+            else:
+                row += f"{'-':<12}{'-':<12}"
+        print(row)
+    print("=" * 70)
+
+
+def print_ablation_table(metrics: dict):
+    print("\n" + "=" * 70)
+    print("Table 3: Ablation Study Results (PSNR / SSIM)")
+    print("=" * 70)
+    ablation_methods = ["sr3dnet", "sr3dnet_no_mddta", "sr3dnet_no_gddfn",
+                        "sr3dnet_no_both", "sr3dnet_n4", "sr3dnet_n12"]
+    header = f"{'Variant':<25}{'2x PSNR':<12}{'2x SSIM':<12}{'4x PSNR':<12}{'4x SSIM':<12}"
+    print(header)
+    print("-" * 70)
+    for name in ablation_methods:
+        label = DISPLAY_NAMES.get(name, name)
+        row = f"{label:<25}"
+        for sk in ["x2", "x4"]:
+            m = metrics.get(name, {}).get(sk, {})
+            if m and "sr_psnr" in m:
+                row += f"{m['sr_psnr']:<12.4f}{m['sr_ssim']:<12.4f}"
+            else:
+                row += f"{'-':<12}{'-':<12}"
+        print(row)
+    print("=" * 70)
 
 
 def main():
@@ -114,8 +179,15 @@ def main():
     parser.add_argument("--results_dir", default="./results")
     args = parser.parse_args()
 
-    print_model_table()
-    print_results_table(args.results_dir)
+    print_complexity_table()
+
+    results_path = Path(args.results_dir)
+    metrics = collect_all_metrics(results_path)
+    if metrics:
+        print_comparative_table(metrics)
+        print_ablation_table(metrics)
+    else:
+        print(f"\nNo metrics found in {results_path}. Run experiments first.")
 
 
 if __name__ == "__main__":

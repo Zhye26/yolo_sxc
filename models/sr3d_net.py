@@ -53,6 +53,8 @@ class SR3DNet(nn.Module):
         num_blocks: int = 8,
         scale: int = 2,
         dilation: int = 2,
+        use_mddta: bool = True,
+        use_gddfn: bool = True,
     ) -> None:
         super().__init__()
         if scale not in (2, 4):
@@ -69,7 +71,8 @@ class SR3DNet(nn.Module):
 
         # Deep feature extraction: N stacked RRAF blocks
         self.body = nn.Sequential(
-            *[RRAF(channels, dilation=dilation) for _ in range(num_blocks)]
+            *[RRAF(channels, dilation=dilation, use_mddta=use_mddta, use_gddfn=use_gddfn)
+              for _ in range(num_blocks)]
         )
 
         # Feature fusion
