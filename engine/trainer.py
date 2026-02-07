@@ -112,7 +112,7 @@ class Trainer:
         self.scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         return checkpoint["epoch"]
 
-    def run(self, resume: str | None = None) -> None:
+    def run(self, resume: str | None = None, val_interval: int = 10) -> None:
         start_epoch = 1
         if resume:
             start_epoch = self.load_checkpoint(resume) + 1
@@ -120,12 +120,14 @@ class Trainer:
         logger.info(f"Training epochs {start_epoch}..{self.epochs}")
         for epoch in range(start_epoch, self.epochs + 1):
             train_metrics = self.train_epoch(epoch)
-            val_metrics = self.validate()
-
             self.writer.add_scalar("train/loss", train_metrics["loss"], epoch)
-            if val_metrics:
-                self.writer.add_scalar("val/psnr", val_metrics["psnr"], epoch)
-                self.writer.add_scalar("val/ssim", val_metrics["ssim"], epoch)
+
+            val_metrics = {}
+            if epoch % val_interval == 0 or epoch == self.epochs:
+                val_metrics = self.validate()
+                if val_metrics:
+                    self.writer.add_scalar("val/psnr", val_metrics["psnr"], epoch)
+                    self.writer.add_scalar("val/ssim", val_metrics["ssim"], epoch)
 
             self.scheduler.step()
 
